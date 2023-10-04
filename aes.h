@@ -54,7 +54,19 @@ uint8_t* aes_extend_witness(const uint8_t* key, const uint8_t* in, const faest_p
 int expand_key(aes_round_keys_t* round_keys, const uint8_t* key, unsigned int key_words,
                unsigned int block_words, unsigned int num_rounds);
 
-void prg(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int bits, size_t outlen);
+void prg(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen);
+
+// TODO outlen should be fixed
+void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen);
+
+void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
+          uint8_t* commitment, size_t commitment_len, unsigned int seclvl);
+
+void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
+             const uint8_t* iv,
+             uint8_t* seed0, uint8_t* seed1, uint8_t* seed2, uint8_t* seed3, size_t seed_len,
+             uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len,
+             unsigned int seclvl);
 FAEST_END_C_DECL
 
 #endif

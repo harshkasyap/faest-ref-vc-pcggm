@@ -294,6 +294,61 @@ int rijndael256_encrypt_block(const aes_round_keys_t* key, const uint8_t* plaint
   return ret;
 }
 
+// sigma(x_l || x_r) = (x_l ^ x_r) || x_l
+// TODO unroll this loop
+static inline void ortho(const uint8_t* in, uint8_t* out, size_t len) {
+  size_t i = 0;
+  for (; i < len/2; i++) {
+    out[i] = in[i] ^ in[i + len/2];
+  }
+  for (; i < len; i++) {
+    out[i] = in[i];
+  }
+}
+
+// static inline void ortho_xor(const uint8_t* in, uint8_t* out, size_t len) {
+//   size_t i = 0;
+//   for (; i < len/2; i++) {
+//     out[i] ^= in[i] ^ in[i + len/2];
+//   }
+//   for (; i < len; i++) {
+//     out[i] ^= in[i];
+//   }
+// }
+
+// AES(ortho(x)) ^ ortho(x)
+// TODO check that prg works for the same input and output address
+// TODO is there a way to just call ortho once?
+void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
+  uint8_t* tmp = malloc(outlen);
+  ortho(key, tmp, outlen);
+  prg(tmp, iv, out, seclvl, outlen);
+  // ortho_xor(key, out, outlen);
+  xor_u8_array(out, tmp, out, outlen);
+  free(tmp);
+}
+
+void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
+          uint8_t* commitment, size_t commitment_len, unsigned int seclvl) {
+  ccr(src, iv, seed, seclvl, seed_len);
+  uint8_t* src2 = malloc(seclvl / 8); // TODO sanity check this
+  memcpy(src2, src, seclvl / 8);
+  src2[0] ^= 1;
+  ccr(src2, iv, commitment, seclvl, commitment_len);
+  free(src2);
+}
+
+void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
+             const uint8_t* iv,
+             uint8_t* seed0, uint8_t* seed1, uint8_t* seed2, uint8_t* seed3, size_t seed_len,
+             uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len,
+             unsigned int seclvl) {
+  ccr2(src0, iv, seed0, seed_len, commitment0, commitment_len, seclvl);
+  ccr2(src1, iv, seed1, seed_len, commitment1, commitment_len, seclvl);
+  ccr2(src2, iv, seed2, seed_len, commitment2, commitment_len, seclvl);
+  ccr2(src3, iv, seed3, seed_len, commitment3, commitment_len, seclvl);
+}
+
 void prg(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
 #if !defined(HAVE_OPENSSL)
   uint8_t internal_iv[16];
