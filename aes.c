@@ -295,47 +295,65 @@ int rijndael256_encrypt_block(const aes_round_keys_t* key, const uint8_t* plaint
 }
 
 // sigma(x_l || x_r) = (x_l ^ x_r) || x_l
-// TODO unroll this loop
 static inline void ortho(const uint8_t* in, uint8_t* out, size_t len) {
   size_t i = 0;
-  for (; i < len/2; i++) {
+  for (; i < len/2; i+=4) {
     out[i] = in[i] ^ in[i + len/2];
+    out[i + 1] = in[i + 1] ^ in[i + len/2 + 1];
+    out[i + 2] = in[i + 2] ^ in[i + len/2 + 2];
+    out[i + 3] = in[i + 3] ^ in[i + len/2 + 3];
   }
-  for (; i < len; i++) {
+  for (; i < len; i+=4) {
     out[i] = in[i];
+    out[i + 1] = in[i + 1];
+    out[i + 2] = in[i + 2];
+    out[i + 3] = in[i + 3];
   }
 }
 
-// static inline void ortho_xor(const uint8_t* in, uint8_t* out, size_t len) {
-//   size_t i = 0;
-//   for (; i < len/2; i++) {
-//     out[i] ^= in[i] ^ in[i + len/2];
-//   }
-//   for (; i < len; i++) {
-//     out[i] ^= in[i];
-//   }
-// }
+static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
+  ortho(in, out, len);
+  out[0] ^= 1;
+}
+
+/*
+static inline void ortho_xor(const uint8_t* in, uint8_t* out, size_t len) {
+  size_t i = 0;
+  for (; i < len/2; i+=4) {
+    out[i] ^= in[i] ^ in[i + len/2];
+    out[i + 1] ^= in[i + 1] ^ in[i + len/2 + 1];
+    out[i + 2] ^= in[i + 2] ^ in[i + len/2 + 2];
+    out[i + 3] ^= in[i + 3] ^ in[i + len/2 + 3];
+  }
+  for (; i < len; i+=4) {
+    out[i] ^= in[i];
+    out[i + 1] ^= in[i + 1];
+    out[i + 2] ^= in[i + 2];
+    out[i + 3] ^= in[i + 3];
+  }
+}
+*/
 
 // AES(ortho(x)) ^ ortho(x)
-// TODO check that prg works for the same input and output address
-// TODO is there a way to just call ortho once?
 void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
-  uint8_t* tmp = malloc(outlen);
-  ortho(key, tmp, outlen);
+  static uint8_t tmp[32];
+  ortho(key, out, outlen);
   prg(tmp, iv, out, seclvl, outlen);
-  // ortho_xor(key, out, outlen);
   xor_u8_array(out, tmp, out, outlen);
-  free(tmp);
+}
+
+
+static inline void ccr_tweaked(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
+  static uint8_t tmp[32];
+  ortho_tweaked(key, out, outlen);
+  prg(tmp, iv, out, seclvl, outlen);
+  xor_u8_array(out, tmp, out, outlen);
 }
 
 void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len, unsigned int seclvl) {
   ccr(src, iv, seed, seclvl, seed_len);
-  uint8_t* src2 = malloc(seclvl / 8); // TODO sanity check this
-  memcpy(src2, src, seclvl / 8);
-  src2[0] ^= 1;
-  ccr(src2, iv, commitment, seclvl, commitment_len);
-  free(src2);
+  ccr_tweaked(src, iv, commitment, seclvl, commitment_len);
 }
 
 void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
