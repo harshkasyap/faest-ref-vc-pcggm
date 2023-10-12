@@ -50,11 +50,11 @@ static ATTR_CONST size_t get_parent(size_t node) {
   return (node - 2) / 2;
 }
 
-// Initialize and reuse one context.
+// Initialize and reuse one context for all the CCR operations.
 // In the end counter mode is used
 // but it is unclear how to reset the counter
 // when using cipher = EVP_aes_128_ctr()
-// so we use ecb here instead.
+// so we use ecb here instead and build out own counter mode in aec_with_ctx.
 static EVP_CIPHER_CTX* setup_ctx(unsigned int seclvl, const uint8_t* iv) {
   const EVP_CIPHER* cipher;
   switch (seclvl) {

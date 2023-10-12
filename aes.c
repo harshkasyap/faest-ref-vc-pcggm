@@ -316,10 +316,20 @@ static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
   out[0] ^= 1;
 }
 
-static inline void aec_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t len) {
-  assert(len % 16 == 0);
-  int outlen = 0;
-  EVP_EncryptUpdate(ctx, out, &outlen, in, len);
+static inline void aec_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+  assert(outlen % 16 == 0 && outlen < 255);
+  int len = 0;
+  uint8_t iv[16] = {0};
+  for (size_t idx = 0; idx < outlen / 16; idx += 1, out += 16) {
+    EVP_EncryptUpdate(ctx, out, &len, iv, sizeof(iv));
+    iv[0] += 1; // iv acts as counter
+    for (size_t i = 0; i < 16; i+=4) {
+      out[i] ^= in[idx * 16 + i];
+      out[i + 1] ^= in[idx * 16 + i + 1];
+      out[i + 2] ^= in[idx * 16 + i + 2];
+      out[i + 3] ^= in[idx * 16 + i + 3];
+    }
+  }
 }
 
 // AES(ortho(x)) ^ ortho(x)
