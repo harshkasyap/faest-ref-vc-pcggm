@@ -316,44 +316,64 @@ static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
   out[0] ^= 1;
 }
 
-/*
-static inline void ortho_xor(const uint8_t* in, uint8_t* out, size_t len) {
-  size_t i = 0;
-  for (; i < len/2; i+=4) {
-    out[i] ^= in[i] ^ in[i + len/2];
-    out[i + 1] ^= in[i + 1] ^ in[i + len/2 + 1];
-    out[i + 2] ^= in[i + 2] ^ in[i + len/2 + 2];
-    out[i + 3] ^= in[i + 3] ^ in[i + len/2 + 3];
-  }
-  for (; i < len; i+=4) {
-    out[i] ^= in[i];
-    out[i + 1] ^= in[i + 1];
-    out[i + 2] ^= in[i + 2];
-    out[i + 3] ^= in[i + 3];
-  }
+static inline void aec_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t len) {
+  assert(len % 16 == 0);
+  int outlen = 0;
+  EVP_EncryptUpdate(ctx, out, &outlen, in, len);
 }
-*/
 
 // AES(ortho(x)) ^ ortho(x)
 void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
   static uint8_t tmp[32];
-  ortho(key, out, outlen);
+  ortho(key, tmp, outlen);
   prg(tmp, iv, out, seclvl, outlen);
-  xor_u8_array(out, tmp, out, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
 }
 
+// AES(ortho(x)) ^ ortho(x)
+void ccr_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+  static uint8_t tmp[32];
+  ortho(in, tmp, outlen);
+  aec_with_ctx(ctx, tmp, out, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
+}
 
 static inline void ccr_tweaked(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
   static uint8_t tmp[32];
-  ortho_tweaked(key, out, outlen);
+  ortho_tweaked(key, tmp, outlen);
   prg(tmp, iv, out, seclvl, outlen);
-  xor_u8_array(out, tmp, out, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
+}
+
+static inline void ccr_tweaked_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+  static uint8_t tmp[32];
+  ortho_tweaked(in, tmp, outlen);
+  aec_with_ctx(ctx, tmp, out, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
 }
 
 void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len, unsigned int seclvl) {
   ccr(src, iv, seed, seclvl, seed_len);
-  ccr_tweaked(src, iv, commitment, seclvl, commitment_len);
+  ccr_tweaked(src, iv, commitment, seclvl, commitment_len/2);
+  // zero the other half of commitment
+  memset(commitment + commitment_len/2, 0, commitment_len/2);
+}
+
+void ccr2_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
+          uint8_t* commitment, size_t commitment_len) {
+  ccr_with_ctx(ctx, src, seed, seed_len);
+  ccr_tweaked_with_ctx(ctx, src, commitment, commitment_len/2);
+  // zero the other half of commitment
+  memset(commitment + commitment_len/2, 0, commitment_len/2);
 }
 
 void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
@@ -365,6 +385,15 @@ void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, cons
   ccr2(src1, iv, seed1, seed_len, commitment1, commitment_len, seclvl);
   ccr2(src2, iv, seed2, seed_len, commitment2, commitment_len, seclvl);
   ccr2(src3, iv, seed3, seed_len, commitment3, commitment_len, seclvl);
+}
+
+void ccr2_x4_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
+             uint8_t* seed0, uint8_t* seed1, uint8_t* seed2, uint8_t* seed3, size_t seed_len,
+             uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len) {
+  ccr2_with_ctx(ctx, src0, seed0, seed_len, commitment0, commitment_len);
+  ccr2_with_ctx(ctx, src1, seed1, seed_len, commitment1, commitment_len);
+  ccr2_with_ctx(ctx, src2, seed2, seed_len, commitment2, commitment_len);
+  ccr2_with_ctx(ctx, src3, seed3, seed_len, commitment3, commitment_len);
 }
 
 void prg(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {

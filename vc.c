@@ -12,6 +12,7 @@
 #include "compat.h"
 #include "aes.h"
 #include "instances.h"
+#include <openssl/evp.h>
 
 #include <assert.h>
 #include <string.h>
@@ -49,6 +50,33 @@ static ATTR_CONST size_t get_parent(size_t node) {
   return (node - 2) / 2;
 }
 
+// Initialize and reuse one context.
+// In the end counter mode is used
+// but it is unclear how to reset the counter
+// when using cipher = EVP_aes_128_ctr()
+// so we use ecb here instead.
+static EVP_CIPHER_CTX* setup_ctx(unsigned int seclvl, const uint8_t* iv) {
+  const EVP_CIPHER* cipher;
+  switch (seclvl) {
+  case 256:
+    cipher = EVP_aes_256_ecb();
+    break;
+  case 192:
+    cipher = EVP_aes_192_ecb();
+    break;
+  default:
+    cipher = EVP_aes_128_ecb();
+    break;
+  }
+
+  EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+  assert(ctx);
+
+  static const uint8_t dummy[16] = {0};
+  EVP_EncryptInit_ex(ctx, cipher, NULL, iv, dummy);
+  return ctx;
+}
+
 static void expand_seeds(tree_t* tree, const uint8_t* iv, const faest_paramset_t* params) {
   const unsigned int lambda_bytes = params->faest_param.lambda / 8;
 
@@ -58,14 +86,21 @@ static void expand_seeds(tree_t* tree, const uint8_t* iv, const faest_paramset_t
   // for scan build
   assert(2 * lastNonLeaf + 2 < tree->numNodes);
 
+  // setup a single context for all
+  EVP_CIPHER_CTX* ctx = setup_ctx(params->faest_param.lambda, iv);
+
+  // expand the tree and reuse the context
   for (size_t i = 0; i <= lastNonLeaf; i++) {
     // the nodes are located other in memory consecutively
-    ccr(NODE(*tree, i, lambda_bytes), iv, NODE(*tree, 2 * i + 1, lambda_bytes),
-        params->faest_param.lambda, lambda_bytes);
+    // ccr(NODE(*tree, i, lambda_bytes), iv, NODE(*tree, 2 * i + 1, lambda_bytes),
+    //     params->faest_param.lambda, lambda_bytes);
+    ccr_with_ctx(ctx, NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes), lambda_bytes);
     // xor the left child with the parent
     xor_u8_array(NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes),
         NODE(*tree, 2 * i + 2, lambda_bytes), lambda_bytes);
   }
+
+  EVP_CIPHER_CTX_free(ctx);
 }
 
 static tree_t generate_seeds(const uint8_t* rootSeed, const uint8_t* iv,
@@ -132,6 +167,8 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
   const unsigned int base_index = tree.numNodes - tree.numLeaves;
   unsigned int i                = 0;
   // compute commitments for 4 instances in parallel
+  // setup a single context for all
+  EVP_CIPHER_CTX* ctx = setup_ctx(lambda, iv);
   for (; i < numVoleInstances / 4 * 4; i += 4) {
     /*
     H0_context_x4_t h0_ctx;
@@ -147,6 +184,7 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
                 vecCom->com + (i + 2) * lambdaBytes * 2, vecCom->com + (i + 3) * lambdaBytes * 2,
                 (lambdaBytes * 2));
     */
+    /*
     ccr2_x4(NODE(tree, base_index + i, lambdaBytes),
             NODE(tree, base_index + i + 1, lambdaBytes),
             NODE(tree, base_index + i + 2, lambdaBytes),
@@ -159,6 +197,17 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
             vecCom->com + (i + 2) * lambdaBytes * 2, vecCom->com + (i + 3) * lambdaBytes * 2,
             (lambdaBytes * 2),
             lambda);
+    */
+    ccr2_x4_with_ctx(ctx, NODE(tree, base_index + i, lambdaBytes),
+            NODE(tree, base_index + i + 1, lambdaBytes),
+            NODE(tree, base_index + i + 2, lambdaBytes),
+            NODE(tree, base_index + i + 3, lambdaBytes),
+            vecCom->sd + i * lambdaBytes, vecCom->sd + (i + 1) * lambdaBytes,
+            vecCom->sd + (i + 2) * lambdaBytes, vecCom->sd + (i + 3) * lambdaBytes,
+            lambdaBytes,
+            vecCom->com + i * lambdaBytes * 2, vecCom->com + (i + 1) * lambdaBytes * 2,
+            vecCom->com + (i + 2) * lambdaBytes * 2, vecCom->com + (i + 3) * lambdaBytes * 2,
+            lambdaBytes * 2);
   }
   // compute commitments for remaining instances
   for (; i < numVoleInstances; i++) {
@@ -170,11 +219,17 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
     H0_final(&h0_ctx, vecCom->sd + (i * lambdaBytes), lambdaBytes,
              vecCom->com + (i * (lambdaBytes * 2)), (lambdaBytes * 2));
     */
+    /*
     ccr2(NODE(tree, base_index + i, lambdaBytes), iv,
          vecCom->sd + (i * lambdaBytes), lambdaBytes,
-         vecCom->com + (i * (lambdaBytes * 2)), (lambdaBytes * 2),
+         vecCom->com + (i * (lambdaBytes * 2)), lambdaBytes * 2,
          lambda);
+    */
+    ccr2_with_ctx(ctx, NODE(tree, base_index + i, lambdaBytes),
+         vecCom->sd + (i * lambdaBytes), lambdaBytes,
+         vecCom->com + (i * (lambdaBytes * 2)), lambdaBytes * 2);
   }
+  EVP_CIPHER_CTX_free(ctx);
 
   tree.nodes = NULL;
 
@@ -212,6 +267,9 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
   const unsigned int numVoleInstances = 1 << depth;
   const uint64_t leafIndex            = NumRec(depth, b);
 
+  // setup a single context for all
+  EVP_CIPHER_CTX* ctx = setup_ctx(lambda, iv);
+
   // Step: 3..9
   uint32_t a = 0;
   for (uint32_t i = 1; i <= depth; i++) {
@@ -226,7 +284,8 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
       }
 
       uint8_t out[2 * MAX_LAMBDA_BYTES];
-      ccr(vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), iv, out, lambda, lambdaBytes);
+      // ccr(vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), iv, out, lambda, lambdaBytes);
+      ccr_with_ctx(ctx, vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), out, lambdaBytes);
       // xor the left child with the parent
       xor_u8_array(vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), out,
           out + lambdaBytes, lambdaBytes);
@@ -258,6 +317,7 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
                 vecComRec->com + (j + 2) * lambdaBytes * 2,
                 vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2);
     */
+    /*
     ccr2_x4(vecComRec->k + (getNodeIndex(depth, j) * lambdaBytes),
             vecComRec->k + (getNodeIndex(depth, j + 1) * lambdaBytes),
             vecComRec->k + (getNodeIndex(depth, j + 2) * lambdaBytes),
@@ -270,6 +330,17 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
             vecComRec->com + (j + 2) * lambdaBytes * 2,
             vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2,
             lambda);
+    */
+    ccr2_x4_with_ctx(ctx, vecComRec->k + (getNodeIndex(depth, j) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 1) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 2) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 3) * lambdaBytes),
+            vecComRec->s + j * lambdaBytes, vecComRec->s + (j + 1) * lambdaBytes,
+            vecComRec->s + (j + 2) * lambdaBytes, vecComRec->s + (j + 3) * lambdaBytes,
+            lambdaBytes, vecComRec->com + j * lambdaBytes * 2,
+            vecComRec->com + (j + 1) * lambdaBytes * 2,
+            vecComRec->com + (j + 2) * lambdaBytes * 2,
+            vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2);
   }
   // reconstruct commitments up until the leafIndex
   for (; j < leafIndex; ++j) {
@@ -281,9 +352,14 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
     H0_final(&h0_ctx, vecComRec->s + j * lambdaBytes, lambdaBytes,
              vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
     */
+    /*
     ccr2(vecComRec->k + getNodeIndex(depth, j) * lambdaBytes, iv,
          vecComRec->s + j * lambdaBytes, lambdaBytes,
          vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2, lambda);
+    */
+    ccr2_with_ctx(ctx, vecComRec->k + getNodeIndex(depth, j) * lambdaBytes,
+         vecComRec->s + j * lambdaBytes, lambdaBytes,
+         vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
   }
   // skip leafIndex
   ++j;
@@ -297,9 +373,14 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
     H0_final(&h0_ctx, vecComRec->s + j * lambdaBytes, lambdaBytes,
              vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
     */
+    /*
     ccr2(vecComRec->k + getNodeIndex(depth, j) * lambdaBytes, iv,
          vecComRec->s + j * lambdaBytes, lambdaBytes,
          vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2, lambda);
+    */
+    ccr2_with_ctx(ctx, vecComRec->k + getNodeIndex(depth, j) * lambdaBytes,
+         vecComRec->s + j * lambdaBytes, lambdaBytes,
+         vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
   }
   // reconstruct 4 instances in parallel
   for (; j < numVoleInstances / 4 * 4; j += 4) {
@@ -318,6 +399,7 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
                 vecComRec->com + (j + 2) * lambdaBytes * 2,
                 vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2);
     */
+    /*
     ccr2_x4(vecComRec->k + (getNodeIndex(depth, j) * lambdaBytes),
             vecComRec->k + (getNodeIndex(depth, j + 1) * lambdaBytes),
             vecComRec->k + (getNodeIndex(depth, j + 2) * lambdaBytes),
@@ -329,6 +411,18 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
             vecComRec->com + (j + 1) * lambdaBytes * 2,
             vecComRec->com + (j + 2) * lambdaBytes * 2,
             vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2, lambda);
+    */
+    ccr2_x4_with_ctx(ctx, vecComRec->k + (getNodeIndex(depth, j) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 1) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 2) * lambdaBytes),
+            vecComRec->k + (getNodeIndex(depth, j + 3) * lambdaBytes),
+            vecComRec->s + j * lambdaBytes, vecComRec->s + (j + 1) * lambdaBytes,
+            vecComRec->s + (j + 2) * lambdaBytes, vecComRec->s + (j + 3) * lambdaBytes,
+            lambdaBytes,
+	    vecComRec->com + j * lambdaBytes * 2,
+            vecComRec->com + (j + 1) * lambdaBytes * 2,
+            vecComRec->com + (j + 2) * lambdaBytes * 2,
+            vecComRec->com + (j + 3) * lambdaBytes * 2, lambdaBytes * 2);
   }
   // reconstruct remaining instances
   for (; j < numVoleInstances; ++j) {
@@ -340,9 +434,14 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
     H0_final(&h0_ctx, vecComRec->s + j * lambdaBytes, lambdaBytes,
              vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
     */
+    /*
     ccr2(vecComRec->k + getNodeIndex(depth, j) * lambdaBytes, iv,
          vecComRec->s + j * lambdaBytes, lambdaBytes,
          vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2, lambda);
+    */
+    ccr2_with_ctx(ctx, vecComRec->k + getNodeIndex(depth, j) * lambdaBytes,
+         vecComRec->s + j * lambdaBytes, lambdaBytes,
+         vecComRec->com + j * lambdaBytes * 2, lambdaBytes * 2);
   }
 
   // Step: 12..13
@@ -351,6 +450,9 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
   H1_init(&h1_ctx, lambda);
   H1_update(&h1_ctx, vecComRec->com, lambdaBytes * 2 * numVoleInstances);
   H1_final(&h1_ctx, vecComRec->h, lambdaBytes * 2);
+
+  // free aes context
+  EVP_CIPHER_CTX_free(ctx);
 }
 
 #if defined(FAEST_TESTS)
