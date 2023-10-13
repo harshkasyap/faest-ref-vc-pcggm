@@ -62,13 +62,11 @@ static void expand_seeds(tree_t* tree, const uint8_t* iv, const faest_paramset_t
   // setup a single context for all
   union CCR_CTX ctx = CCR_CTX_setup(params->faest_param.lambda, iv);
 
-  // expand the tree and reuse the context
+  // expand the tree; first level uses prg, the rest uses CCR
   prg(NODE(*tree, 0, lambda_bytes), iv, NODE(*tree, 1, lambda_bytes),
     params->faest_param.lambda, lambda_bytes * 2);
   for (size_t i = 1; i <= lastNonLeaf; i++) {
-    // the nodes are located other in memory consecutively
-    // ccr(NODE(*tree, i, lambda_bytes), iv, NODE(*tree, 2 * i + 1, lambda_bytes),
-    //     params->faest_param.lambda, lambda_bytes);
+    // the nodes are located in memory consecutively
     ccr_with_ctx(&ctx, NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes), lambda_bytes);
     // xor the left child with the parent
     xor_u8_array(NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes),
@@ -211,6 +209,7 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
   // Step: 6
   H1_context_t h1_ctx;
   H1_init(&h1_ctx, lambda);
+  H1_update(&h1_ctx, iv, IV_SIZE);
   for (uint32_t j = 0; j < numVoleInstances; j++) {
     H1_update(&h1_ctx, vecCom->com + (j * (lambdaBytes * 2)), (lambdaBytes * 2));
   }
@@ -423,6 +422,7 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
   memcpy(vecComRec->com + (lambdaBytes * 2 * leafIndex), com_j, lambdaBytes * 2);
   H1_context_t h1_ctx;
   H1_init(&h1_ctx, lambda);
+  H1_update(&h1_ctx, iv, IV_SIZE);
   H1_update(&h1_ctx, vecComRec->com, lambdaBytes * 2 * numVoleInstances);
   H1_final(&h1_ctx, vecComRec->h, lambdaBytes * 2);
 
