@@ -17,10 +17,6 @@
 #endif
 #include <string.h>
 
-#define ROUNDS_128 10
-#define ROUNDS_192 12
-#define ROUNDS_256 14
-
 #define KEY_WORDS_128 4
 #define KEY_WORDS_192 6
 #define KEY_WORDS_256 8
@@ -28,9 +24,6 @@
 #define AES_BLOCK_WORDS 4
 #define RIJNDAEL_BLOCK_WORDS_192 6
 #define RIJNDAEL_BLOCK_WORDS_256 8
-
-#include <immintrin.h>
-#include <wmmintrin.h>
 
 static const bf8_t round_constants[30] = {
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a,
@@ -297,6 +290,289 @@ int rijndael256_encrypt_block(const aes_round_keys_t* key, const uint8_t* plaint
   return ret;
 }
 
+// avx stuff
+inline block128 block128_xor(block128 x, block128 y) { return _mm_xor_si128(x, y); }
+inline block256 block256_xor(block256 x, block256 y) { return _mm256_xor_si256(x, y); }
+inline block128 block128_set_zero() { return _mm_setzero_si128(); }
+inline block256 block256_set_zero() { return _mm256_setzero_si256(); }
+inline block256 block256_set_low128(block128 x)
+{
+	return _mm256_inserti128_si256(_mm256_setzero_si256(), x, 0);
+}
+
+static inline block128 load_high_64(const block192* block)
+{
+	return _mm_cvtsi64_si128(block->data[2]);
+}
+
+static inline block128 load_high_128(const block256* block)
+{
+	block128 out;
+	memcpy(&out, ((unsigned char*) block) + sizeof(block128), sizeof(out));
+	return out;
+}
+
+static void rijndael192_keygen_helper(
+	const block192* round_key_in, block128 kga, block192* round_key_out)
+{
+	block128 t1, t2, t4;
+	uint64_t t3;
+
+	memcpy(&t1, &round_key_in->data[0], sizeof(t1));
+	t2 = kga;
+	t3 = round_key_in->data[2];
+
+	t2 = _mm_shuffle_epi32(t2, 0x55);
+	t4 = _mm_slli_si128(t1, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t1 = _mm_xor_si128(t1, t2);
+	t3 ^= (uint32_t) _mm_extract_epi32(t1, 3);
+	t3 ^= t3 << 32;
+
+	memcpy(&round_key_out->data[0], &t1, sizeof(t1));
+	round_key_out->data[2] = t3;
+}
+
+static void rijndael256_keygen_helper(
+	const block256* round_key_in, block128 kga, block256* round_key_out)
+{
+	block128 t1, t2, t3, t4;
+
+	memcpy(&t1, round_key_in, sizeof(t1));
+	t3 = load_high_128(round_key_in);
+	t2 = kga;
+
+	t2 = _mm_shuffle_epi32(t2, 0xff);
+	t4 = _mm_slli_si128(t1, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t1 = _mm_xor_si128(t1, t4);
+	t1 = _mm_xor_si128(t1, t2);
+
+	memcpy(round_key_out, &t1, sizeof(t1));
+
+	t4 = _mm_aeskeygenassist_si128(t1, 0x00);
+	t2 = _mm_shuffle_epi32(t4, 0xaa);
+	t4 = _mm_slli_si128(t3, 0x4);
+	t3 = _mm_xor_si128(t3, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t3 = _mm_xor_si128(t3, t4);
+	t4 = _mm_slli_si128(t4, 0x4);
+	t3 = _mm_xor_si128(t3, t4);
+	t3 = _mm_xor_si128(t3, t2);
+
+	memcpy(((unsigned char*) round_key_out) + sizeof(t1), &t3, sizeof(t3));
+}
+
+void rijndael192_keygen(rijndael192_round_keys* round_keys, block192 key)
+{
+	round_keys->keys[0] = key;
+
+	block128 kga;
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[0]), 0x01);
+	rijndael192_keygen_helper(&round_keys->keys[0], kga, &round_keys->keys[1]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[1]), 0x02);
+	rijndael192_keygen_helper(&round_keys->keys[1], kga, &round_keys->keys[2]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[2]), 0x04);
+	rijndael192_keygen_helper(&round_keys->keys[2], kga, &round_keys->keys[3]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[3]), 0x08);
+	rijndael192_keygen_helper(&round_keys->keys[3], kga, &round_keys->keys[4]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[4]), 0x10);
+	rijndael192_keygen_helper(&round_keys->keys[4], kga, &round_keys->keys[5]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[5]), 0x20);
+	rijndael192_keygen_helper(&round_keys->keys[5], kga, &round_keys->keys[6]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[6]), 0x40);
+	rijndael192_keygen_helper(&round_keys->keys[6], kga, &round_keys->keys[7]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[7]), 0x80);
+	rijndael192_keygen_helper(&round_keys->keys[7], kga, &round_keys->keys[8]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[8]), 0x1B);
+	rijndael192_keygen_helper(&round_keys->keys[8], kga, &round_keys->keys[9]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[9]), 0x36);
+	rijndael192_keygen_helper(&round_keys->keys[9], kga, &round_keys->keys[10]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[10]), 0x6C);
+	rijndael192_keygen_helper(&round_keys->keys[10], kga, &round_keys->keys[11]);
+	kga = _mm_aeskeygenassist_si128(load_high_64(&round_keys->keys[11]), 0xD8);
+	rijndael192_keygen_helper(&round_keys->keys[11], kga, &round_keys->keys[12]);
+}
+
+void rijndael256_keygen(rijndael256_round_keys* round_keys, block256 key)
+{
+	round_keys->keys[0] = key;
+
+	block128 kga;
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[0]), 0x01);
+	rijndael256_keygen_helper(&round_keys->keys[0], kga, &round_keys->keys[1]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[1]), 0x02);
+	rijndael256_keygen_helper(&round_keys->keys[1], kga, &round_keys->keys[2]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[2]), 0x04);
+	rijndael256_keygen_helper(&round_keys->keys[2], kga, &round_keys->keys[3]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[3]), 0x08);
+	rijndael256_keygen_helper(&round_keys->keys[3], kga, &round_keys->keys[4]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[4]), 0x10);
+	rijndael256_keygen_helper(&round_keys->keys[4], kga, &round_keys->keys[5]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[5]), 0x20);
+	rijndael256_keygen_helper(&round_keys->keys[5], kga, &round_keys->keys[6]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[6]), 0x40);
+	rijndael256_keygen_helper(&round_keys->keys[6], kga, &round_keys->keys[7]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[7]), 0x80);
+	rijndael256_keygen_helper(&round_keys->keys[7], kga, &round_keys->keys[8]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[8]), 0x1B);
+	rijndael256_keygen_helper(&round_keys->keys[8], kga, &round_keys->keys[9]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[9]), 0x36);
+	rijndael256_keygen_helper(&round_keys->keys[9], kga, &round_keys->keys[10]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[10]), 0x6C);
+	rijndael256_keygen_helper(&round_keys->keys[10], kga, &round_keys->keys[11]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[11]), 0xD8);
+	rijndael256_keygen_helper(&round_keys->keys[11], kga, &round_keys->keys[12]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[12]), 0xAB);
+	rijndael256_keygen_helper(&round_keys->keys[12], kga, &round_keys->keys[13]);
+	kga = _mm_aeskeygenassist_si128(load_high_128(&round_keys->keys[13]), 0x4D);
+	rijndael256_keygen_helper(&round_keys->keys[13], kga, &round_keys->keys[14]);
+}
+
+inline block192 block192_xor(block192 x, block192 y)
+{
+	// Plain c version for now at least. Hopefully it will be autovectorized.
+	block192 out;
+	out.data[0] = x.data[0] ^ y.data[0];
+	out.data[1] = x.data[1] ^ y.data[1];
+	out.data[2] = x.data[2] ^ y.data[2];
+	return out;
+}
+
+static inline void cvt192_to_2x128(block128* out, const block192* in)
+{
+	memcpy(&out[0], &in->data[0], sizeof(out[0]));
+	out[1] = _mm_set1_epi64x(in->data[2]);
+}
+
+// This implements the rijndael192 RotateRows step, then cancels out the RotateRows of AES so
+// that AES-NI can be used for the sbox. The rijndael192 state is represented with the first 4
+// columns in the first block128, and then the last two columns are stored twice in the second
+// block128.
+inline void rijndael192_rotate_rows_undo_128(block128* s)
+{
+	block128 mask = _mm_setr_epi8(
+		0, -1, -1,  0,
+		0,  0, -1, -1,
+		0,  0,  0, -1,
+		0,  0,  0,  0);
+	block128 b0_blended = _mm_blendv_epi8(s[0], s[1], mask);
+	block128 b1_blended = _mm_blendv_epi8(s[1], s[0], mask);
+
+	block128 shuffle_b0 = _mm_setr_epi8(
+		 0,  1,  2, 11,
+		 4,  5,  6,  7,
+		 8,  9, 10,  3,
+		12, 13, 14, 15);
+	block128 shuffle_b1 = _mm_setr_epi8(
+		 0,  1,  2, 11,
+		 4,  5,  6,  7,
+		 0,  1,  2, 11,
+		 4,  5,  6,  7);
+	s[0] = _mm_shuffle_epi8(b0_blended, shuffle_b0);
+	s[1] = _mm_shuffle_epi8(b1_blended, shuffle_b1);
+}
+
+// Just do 1 block at a time because this function shouldn't be used much.
+void rijndael192_encrypt_block_avx(
+	const rijndael192_round_keys* restrict fixed_key, block192* restrict block)
+{
+	block192 xored_block = block192_xor(*block, fixed_key->keys[0]);
+	block128 state[2], round_key[2];
+	cvt192_to_2x128(&state[0], &xored_block);
+
+	for (int round = 1; round < ROUNDS_192; ++round)
+	{
+		cvt192_to_2x128(&round_key[0], &fixed_key->keys[round]);
+		rijndael192_rotate_rows_undo_128(&state[0]);
+		state[0] = _mm_aesenc_si128(state[0], round_key[0]);
+		state[1] = _mm_aesenc_si128(state[1], round_key[1]);
+	}
+
+	rijndael192_rotate_rows_undo_128(&state[0]);
+	cvt192_to_2x128(&round_key[0], &fixed_key->keys[ROUNDS_192]);
+	state[0] = _mm_aesenclast_si128(state[0], round_key[0]);
+	state[1] = _mm_aesenclast_si128(state[1], round_key[1]);
+
+	memcpy(block, &state[0], sizeof(*block));
+}
+
+// This implements the rijndael256 RotateRows step, then cancels out the RotateRows of AES so
+// that AES-NI can be used for the sbox.
+inline void rijndael256_rotate_rows_undo_128(block128* s)
+{
+	// Swapping bytes between 128-bit halves is equivalent to rotating left overall, then
+	// rotating right within each half.
+	block128 mask = _mm_setr_epi8(
+		0, -1, -1, -1,
+		0,  0, -1, -1,
+		0,  0, -1, -1,
+		0,  0,  0, -1);
+	block128 b0_blended = _mm_blendv_epi8(s[0], s[1], mask);
+	block128 b1_blended = _mm_blendv_epi8(s[1], s[0], mask);
+
+	// The rotations for 128-bit AES are different, so rotate within the halves to
+	// match.
+	block128 perm = _mm_setr_epi8(
+		 0,  1,  6,  7,
+		 4,  5, 10, 11,
+		 8,  9, 14, 15,
+		12, 13,  2,  3);
+	s[0] = _mm_shuffle_epi8(b0_blended, perm);
+	s[1] = _mm_shuffle_epi8(b1_blended, perm);
+}
+
+
+inline void rijndael256_round(
+	const rijndael256_round_keys* round_keys, block256* state,
+	size_t num_keys, size_t evals_per_key, int round)
+{
+	for (size_t i = 0; i < num_keys * evals_per_key; ++i)
+	{
+		block128 s[2], round_key[2];
+		memcpy(&s[0], &state[i], sizeof(block256));
+		memcpy(&round_key[0], &round_keys[i / evals_per_key].keys[round], sizeof(block256));
+
+		// Use AES-NI to implement the round function.
+		if (round == 0)
+		{
+			s[0] = block128_xor(s[0], round_key[0]);
+			s[1] = block128_xor(s[1], round_key[1]);
+		}
+		else if (round < ROUNDS_256)
+		{
+			rijndael256_rotate_rows_undo_128(&s[0]);
+			s[0] = _mm_aesenc_si128(s[0], round_key[0]);
+			s[1] = _mm_aesenc_si128(s[1], round_key[1]);
+		}
+		else
+		{
+			rijndael256_rotate_rows_undo_128(&s[0]);
+			s[0] = _mm_aesenclast_si128(s[0], round_key[0]);
+			s[1] = _mm_aesenclast_si128(s[1], round_key[1]);
+		}
+
+		memcpy(&state[i], &s[0], sizeof(block256));
+	}
+}
+
+void rijndael256_encrypt_block_avx(
+	const rijndael256_round_keys* restrict fixed_key, block256* restrict block)
+{
+	// the round function takes care of the first and the last round
+	rijndael256_round(fixed_key, block, 1, 1, 0);
+	for (int round = 1; round < ROUNDS_256; ++round)
+		rijndael256_round(fixed_key, block, 1, 1, round);
+	rijndael256_round(fixed_key, block, 1, 1, ROUNDS_256);
+}
+
 // sigma(x_l || x_r) = (x_l ^ x_r) || x_l
 static inline void ortho(const uint8_t* in, uint8_t* out, size_t len) {
   size_t i = 0;
@@ -319,9 +595,23 @@ static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
   out[0] ^= 1;
 }
 
-static inline void aec_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
-  assert(outlen % 16 == 0 && outlen < 255);
+static inline void permute_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
   int len = 0;
+  block256 tmp = block256_set_zero();
+  switch (outlen*8) { // outlen is the seclvl
+  case 256:
+    rijndael256_encrypt_block_avx(&ctx->r256_round_keys, &tmp);
+    memcpy(out, (uint8_t*)(&tmp), outlen);
+    break;
+  case 192:
+    memcpy(out, in, outlen);
+    rijndael192_encrypt_block_avx(&ctx->r192_round_keys, (block192*) out);
+    break;
+  default:
+    EVP_EncryptUpdate(ctx->evp_ctx, out, &len, in, outlen);
+    break;
+  }
+  /*
   uint8_t iv[16] = {0};
   for (size_t idx = 0; idx < outlen / 16; idx += 1, out += 16) {
     EVP_EncryptUpdate(ctx, out, &len, iv, sizeof(iv));
@@ -332,6 +622,41 @@ static inline void aec_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t*
       out[i + 2] ^= in[idx * 16 + i + 2];
       out[i + 3] ^= in[idx * 16 + i + 3];
     }
+  }
+  */
+}
+
+union CCR_CTX CCR_CTX_setup(unsigned int seclvl, const uint8_t* iv) {
+  const EVP_CIPHER* cipher;
+  union CCR_CTX out;
+  block256 iv_big = block256_set_low128(_mm_loadu_si128((block128 const*)iv));
+  switch (seclvl) {
+  case 256:
+    rijndael256_keygen(&out.r256_round_keys, iv_big);
+    return out;
+  case 192:
+    return out;
+  default:
+    cipher = EVP_aes_128_ecb();
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    static const uint8_t dummy[16] = {0};
+    EVP_EncryptInit_ex(ctx, cipher, NULL, iv, dummy);
+    out.evp_ctx = ctx;
+    return out;
+  }
+}
+
+void CCR_CTX_free(union CCR_CTX *ctx, unsigned int seclvl) {
+  switch (seclvl) {
+  case 256:
+    // no need to do anything because the fixed key is on stack
+    break;
+  case 192:
+    // no need to do anything because the fixed key is on stack
+    break;
+  default:
+    EVP_CIPHER_CTX_free(ctx->evp_ctx);
+    break;
   }
 }
 
@@ -346,10 +671,10 @@ void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclv
 }
 
 // AES(ortho(x)) ^ ortho(x)
-void ccr_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+void ccr_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
   static uint8_t tmp[32];
   ortho(in, tmp, outlen);
-  aec_with_ctx(ctx, tmp, out, outlen);
+  permute_with_ctx(ctx, tmp, out, outlen);
   for (size_t i = 0; i < outlen; i++) {
     out[i] ^= tmp[i];
   }
@@ -364,10 +689,10 @@ static inline void ccr_tweaked(const uint8_t* key, const uint8_t* iv, uint8_t* o
   }
 }
 
-static inline void ccr_tweaked_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+static inline void ccr_tweaked_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
   static uint8_t tmp[32];
   ortho_tweaked(in, tmp, outlen);
-  aec_with_ctx(ctx, tmp, out, outlen);
+  permute_with_ctx(ctx, tmp, out, outlen);
   for (size_t i = 0; i < outlen; i++) {
     out[i] ^= tmp[i];
   }
@@ -381,7 +706,7 @@ void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
   memset(commitment + commitment_len/2, 0, commitment_len/2);
 }
 
-void ccr2_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
+void ccr2_with_ctx(union CCR_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len) {
   ccr_with_ctx(ctx, src, seed, seed_len);
   ccr_tweaked_with_ctx(ctx, src, commitment, commitment_len/2);
@@ -400,7 +725,7 @@ void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, cons
   ccr2(src3, iv, seed3, seed_len, commitment3, commitment_len, seclvl);
 }
 
-void ccr2_x4_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
+void ccr2_x4_with_ctx(union CCR_CTX* ctx, const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
              uint8_t* seed0, uint8_t* seed1, uint8_t* seed2, uint8_t* seed3, size_t seed_len,
              uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len) {
   ccr2_with_ctx(ctx, src0, seed0, seed_len, commitment0, commitment_len);
@@ -612,86 +937,3 @@ uint8_t* aes_extend_witness(const uint8_t* key, const uint8_t* in, const faest_p
   return w_out;
 }
 
-typedef __m128i block128;
-typedef __m256i block256;
-typedef struct
-{
-	uint64_t data[3];
-} block192;
-typedef struct
-{
-	block192 keys[ROUNDS_192 + 1];
-} rijndael192_round_keys;
-
-typedef struct
-{
-	block256 keys[ROUNDS_256 + 1];
-} rijndael256_round_keys;
-
-inline block192 block192_xor(block192 x, block192 y)
-{
-	// Plain c version for now at least. Hopefully it will be autovectorized.
-	block192 out;
-	out.data[0] = x.data[0] ^ y.data[0];
-	out.data[1] = x.data[1] ^ y.data[1];
-	out.data[2] = x.data[2] ^ y.data[2];
-	return out;
-}
-
-static inline void cvt192_to_2x128(block128* out, const block192* in)
-{
-	memcpy(&out[0], &in->data[0], sizeof(out[0]));
-	out[1] = _mm_set1_epi64x(in->data[2]);
-}
-
-// This implements the rijndael192 RotateRows step, then cancels out the RotateRows of AES so
-// that AES-NI can be used for the sbox. The rijndael192 state is represented with the first 4
-// columns in the first block128, and then the last two columns are stored twice in the second
-// block128.
-inline void rijndael192_rotate_rows_undo_128(block128* s)
-{
-	block128 mask = _mm_setr_epi8(
-		0, -1, -1,  0,
-		0,  0, -1, -1,
-		0,  0,  0, -1,
-		0,  0,  0,  0);
-	block128 b0_blended = _mm_blendv_epi8(s[0], s[1], mask);
-	block128 b1_blended = _mm_blendv_epi8(s[1], s[0], mask);
-
-	block128 shuffle_b0 = _mm_setr_epi8(
-		 0,  1,  2, 11,
-		 4,  5,  6,  7,
-		 8,  9, 10,  3,
-		12, 13, 14, 15);
-	block128 shuffle_b1 = _mm_setr_epi8(
-		 0,  1,  2, 11,
-		 4,  5,  6,  7,
-		 0,  1,  2, 11,
-		 4,  5,  6,  7);
-	s[0] = _mm_shuffle_epi8(b0_blended, shuffle_b0);
-	s[1] = _mm_shuffle_epi8(b1_blended, shuffle_b1);
-}
-
-// Just do 1 block at a time because this function shouldn't be used much.
-void rijndael192_encrypt_block_avx(
-	const rijndael192_round_keys* restrict fixed_key, block192* restrict block)
-{
-	block192 xored_block = block192_xor(*block, fixed_key->keys[0]);
-	block128 state[2], round_key[2];
-	cvt192_to_2x128(&state[0], &xored_block);
-
-	for (int round = 1; round < ROUNDS_192; ++round)
-	{
-		cvt192_to_2x128(&round_key[0], &fixed_key->keys[round]);
-		rijndael192_rotate_rows_undo_128(&state[0]);
-		state[0] = _mm_aesenc_si128(state[0], round_key[0]);
-		state[1] = _mm_aesenc_si128(state[1], round_key[1]);
-	}
-
-	rijndael192_rotate_rows_undo_128(&state[0]);
-	cvt192_to_2x128(&round_key[0], &fixed_key->keys[ROUNDS_192]);
-	state[0] = _mm_aesenclast_si128(state[0], round_key[0]);
-	state[1] = _mm_aesenclast_si128(state[1], round_key[1]);
-
-	memcpy(block, &state[0], sizeof(*block));
-}

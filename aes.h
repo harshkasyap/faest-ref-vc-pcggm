@@ -12,6 +12,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <immintrin.h>
+#include <wmmintrin.h>
+
+
 FAEST_BEGIN_C_DECL
 
 #define AES_MAX_ROUNDS 14
@@ -57,6 +61,38 @@ int expand_key(aes_round_keys_t* round_keys, const uint8_t* key, unsigned int ke
 
 void prg(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen);
 
+typedef __m128i block128;
+typedef __m256i block256;
+
+#define ROUNDS_128 10
+#define ROUNDS_192 12
+#define ROUNDS_256 14
+
+typedef struct
+{
+	uint64_t data[3];
+} block192;
+
+typedef struct
+{
+	block192 keys[ROUNDS_192 + 1];
+} rijndael192_round_keys;
+
+typedef struct
+{
+	block256 keys[ROUNDS_256 + 1];
+} rijndael256_round_keys;
+
+union CCR_CTX {
+  EVP_CIPHER_CTX* evp_ctx;
+  rijndael192_round_keys r192_round_keys;
+  rijndael256_round_keys r256_round_keys;
+};
+
+union CCR_CTX CCR_CTX_setup(unsigned int seclvl, const uint8_t* iv);
+
+void CCR_CTX_free(union CCR_CTX* ctx, unsigned int seclvl);
+
 // TODO outlen should be fixed
 void ccr(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen);
 
@@ -69,12 +105,12 @@ void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, cons
              uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len,
              unsigned int seclvl);
 
-void ccr_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen);
+void ccr_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen);
 
-void ccr2_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
+void ccr2_with_ctx(union CCR_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len);
 
-void ccr2_x4_with_ctx(EVP_CIPHER_CTX* ctx, const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
+void ccr2_x4_with_ctx(union CCR_CTX* ctx, const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
              uint8_t* seed0, uint8_t* seed1, uint8_t* seed2, uint8_t* seed3, size_t seed_len,
              uint8_t* commitment0, uint8_t* commitment1, uint8_t* commitment2, uint8_t* commitment3, size_t commitment_len);
 FAEST_END_C_DECL
