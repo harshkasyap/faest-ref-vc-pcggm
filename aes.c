@@ -29,6 +29,9 @@
 #define RIJNDAEL_BLOCK_WORDS_192 6
 #define RIJNDAEL_BLOCK_WORDS_256 8
 
+#include <immintrin.h>
+#include <wmmintrin.h>
+
 static const bf8_t round_constants[30] = {
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a,
     0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91,
@@ -607,4 +610,88 @@ uint8_t* aes_extend_witness(const uint8_t* key, const uint8_t* in, const faest_p
   }
 
   return w_out;
+}
+
+typedef __m128i block128;
+typedef __m256i block256;
+typedef struct
+{
+	uint64_t data[3];
+} block192;
+typedef struct
+{
+	block192 keys[ROUNDS_192 + 1];
+} rijndael192_round_keys;
+
+typedef struct
+{
+	block256 keys[ROUNDS_256 + 1];
+} rijndael256_round_keys;
+
+inline block192 block192_xor(block192 x, block192 y)
+{
+	// Plain c version for now at least. Hopefully it will be autovectorized.
+	block192 out;
+	out.data[0] = x.data[0] ^ y.data[0];
+	out.data[1] = x.data[1] ^ y.data[1];
+	out.data[2] = x.data[2] ^ y.data[2];
+	return out;
+}
+
+static inline void cvt192_to_2x128(block128* out, const block192* in)
+{
+	memcpy(&out[0], &in->data[0], sizeof(out[0]));
+	out[1] = _mm_set1_epi64x(in->data[2]);
+}
+
+// This implements the rijndael192 RotateRows step, then cancels out the RotateRows of AES so
+// that AES-NI can be used for the sbox. The rijndael192 state is represented with the first 4
+// columns in the first block128, and then the last two columns are stored twice in the second
+// block128.
+inline void rijndael192_rotate_rows_undo_128(block128* s)
+{
+	block128 mask = _mm_setr_epi8(
+		0, -1, -1,  0,
+		0,  0, -1, -1,
+		0,  0,  0, -1,
+		0,  0,  0,  0);
+	block128 b0_blended = _mm_blendv_epi8(s[0], s[1], mask);
+	block128 b1_blended = _mm_blendv_epi8(s[1], s[0], mask);
+
+	block128 shuffle_b0 = _mm_setr_epi8(
+		 0,  1,  2, 11,
+		 4,  5,  6,  7,
+		 8,  9, 10,  3,
+		12, 13, 14, 15);
+	block128 shuffle_b1 = _mm_setr_epi8(
+		 0,  1,  2, 11,
+		 4,  5,  6,  7,
+		 0,  1,  2, 11,
+		 4,  5,  6,  7);
+	s[0] = _mm_shuffle_epi8(b0_blended, shuffle_b0);
+	s[1] = _mm_shuffle_epi8(b1_blended, shuffle_b1);
+}
+
+// Just do 1 block at a time because this function shouldn't be used much.
+void rijndael192_encrypt_block_avx(
+	const rijndael192_round_keys* restrict fixed_key, block192* restrict block)
+{
+	block192 xored_block = block192_xor(*block, fixed_key->keys[0]);
+	block128 state[2], round_key[2];
+	cvt192_to_2x128(&state[0], &xored_block);
+
+	for (int round = 1; round < ROUNDS_192; ++round)
+	{
+		cvt192_to_2x128(&round_key[0], &fixed_key->keys[round]);
+		rijndael192_rotate_rows_undo_128(&state[0]);
+		state[0] = _mm_aesenc_si128(state[0], round_key[0]);
+		state[1] = _mm_aesenc_si128(state[1], round_key[1]);
+	}
+
+	rijndael192_rotate_rows_undo_128(&state[0]);
+	cvt192_to_2x128(&round_key[0], &fixed_key->keys[ROUNDS_192]);
+	state[0] = _mm_aesenclast_si128(state[0], round_key[0]);
+	state[1] = _mm_aesenclast_si128(state[1], round_key[1]);
+
+	memcpy(block, &state[0], sizeof(*block));
 }
