@@ -312,6 +312,28 @@ static inline block128 load_high_128(const block256* block)
 	return out;
 }
 
+inline block192 block192_set_low64(uint64_t x)
+{
+	block192 out = {{x, 0, 0}};
+	return out;
+}
+
+inline block192 block192_set_low32(uint32_t x)
+{
+	return block192_set_low64(x);
+}
+
+inline block192 block192_set_zero()
+{
+	return block192_set_low64(0);
+}
+
+inline block192 block192_set_low128(const uint8_t* x)
+{
+	block192 out = {{*((uint64_t*)(x)), *((uint64_t*)(x+8)), 0}};
+	return out;
+}
+
 static void rijndael192_keygen_helper(
 	const block192* round_key_in, block128 kga, block192* round_key_out)
 {
@@ -596,12 +618,14 @@ static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
 }
 
 static inline void permute_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+  // we need to create these temporary variables because they need to be aligned
+  block256 tmp256 = block256_set_zero();
   int len = 0;
-  block256 tmp = block256_set_zero();
   switch (outlen*8) { // outlen is the seclvl
   case 256:
-    rijndael256_encrypt_block_avx(&ctx->r256_round_keys, &tmp);
-    memcpy(out, (uint8_t*)(&tmp), outlen);
+    tmp256 = _mm256_loadu_si256((block256 const*)in);
+    rijndael256_encrypt_block_avx(&ctx->r256_round_keys, &tmp256);
+    memcpy(out, (uint8_t*)(&tmp256), outlen);
     break;
   case 192:
     memcpy(out, in, outlen);
@@ -629,12 +653,14 @@ static inline void permute_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8
 union CCR_CTX CCR_CTX_setup(unsigned int seclvl, const uint8_t* iv) {
   const EVP_CIPHER* cipher;
   union CCR_CTX out;
-  block256 iv_big = block256_set_low128(_mm_loadu_si128((block128 const*)iv));
+  block256 iv256 = block256_set_low128(_mm_loadu_si128((block128 const*)iv));
+  block192 iv192 = block192_set_low128(iv);
   switch (seclvl) {
   case 256:
-    rijndael256_keygen(&out.r256_round_keys, iv_big);
+    rijndael256_keygen(&out.r256_round_keys, iv256);
     return out;
   case 192:
+    rijndael192_keygen(&out.r192_round_keys, iv192);
     return out;
   default:
     cipher = EVP_aes_128_ecb();
