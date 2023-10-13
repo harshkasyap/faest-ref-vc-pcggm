@@ -90,7 +90,9 @@ static void expand_seeds(tree_t* tree, const uint8_t* iv, const faest_paramset_t
   EVP_CIPHER_CTX* ctx = setup_ctx(params->faest_param.lambda, iv);
 
   // expand the tree and reuse the context
-  for (size_t i = 0; i <= lastNonLeaf; i++) {
+  prg(NODE(*tree, 0, lambda_bytes), iv, NODE(*tree, 1, lambda_bytes),
+    params->faest_param.lambda, lambda_bytes * 2);
+  for (size_t i = 1; i <= lastNonLeaf; i++) {
     // the nodes are located other in memory consecutively
     // ccr(NODE(*tree, i, lambda_bytes), iv, NODE(*tree, 2 * i + 1, lambda_bytes),
     //     params->faest_param.lambda, lambda_bytes);
