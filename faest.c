@@ -96,11 +96,13 @@ ATTR_PURE static inline uint8_t* signature_com(uint8_t* base_ptr, unsigned int i
 ATTR_PURE static inline uint8_t* signature_chall_3(uint8_t* base_ptr,
                                                    const faest_paramset_t* params) {
   const size_t lambda_bytes = params->faest_param.lambda / 8;
-  return base_ptr + params->faest_param.sigSize - IV_SIZE - lambda_bytes;
+  const size_t iv_size = params->faest_param.lambda / 8;
+  return base_ptr + params->faest_param.sigSize - iv_size - lambda_bytes;
 }
 
 ATTR_PURE static inline uint8_t* signature_iv(uint8_t* base_ptr, const faest_paramset_t* params) {
-  return base_ptr + params->faest_param.sigSize - IV_SIZE;
+  const size_t iv_size = params->faest_param.lambda / 8;
+  return base_ptr + params->faest_param.sigSize - iv_size;
 }
 
 // helpers to compute position in signature (verify)
@@ -185,12 +187,14 @@ ATTR_PURE static inline const uint8_t* dsignature_com(const uint8_t* base_ptr, u
 ATTR_PURE static inline const uint8_t* dsignature_chall_3(const uint8_t* base_ptr,
                                                           const faest_paramset_t* params) {
   const size_t lambda_bytes = params->faest_param.lambda / 8;
-  return base_ptr + params->faest_param.sigSize - IV_SIZE - lambda_bytes;
+  const size_t iv_size = params->faest_param.lambda / 8;
+  return base_ptr + params->faest_param.sigSize - iv_size - lambda_bytes;
 }
 
 ATTR_PURE static inline const uint8_t* dsignature_iv(const uint8_t* base_ptr,
                                                      const faest_paramset_t* params) {
-  return base_ptr + params->faest_param.sigSize - IV_SIZE;
+  const size_t iv_size = params->faest_param.lambda / 8;
+  return base_ptr + params->faest_param.sigSize - iv_size;
 }
 
 static void hash_mu(uint8_t* mu, const uint8_t* owf_input, const uint8_t* owf_output,
@@ -207,6 +211,7 @@ static void hash_challenge_1(uint8_t* chall_1, const uint8_t* mu, const uint8_t*
                              const uint8_t* c, const uint8_t* iv, unsigned int lambda,
                              unsigned int ell, unsigned int tau) {
   const unsigned int lambda_bytes  = lambda / 8;
+  const unsigned int iv_size = lambda_bytes;
   const unsigned int ell_hat_bytes = ell / 8 + lambda_bytes * 2 + UNIVERSAL_HASH_B;
 
   H2_context_t h2_ctx;
@@ -214,7 +219,7 @@ static void hash_challenge_1(uint8_t* chall_1, const uint8_t* mu, const uint8_t*
   H2_update(&h2_ctx, mu, lambda_bytes * 2);
   H2_update(&h2_ctx, hcom, lambda_bytes * 2);
   H2_update(&h2_ctx, c, ell_hat_bytes * (tau - 1));
-  H2_update(&h2_ctx, iv, IV_SIZE);
+  H2_update(&h2_ctx, iv, iv_size);
   H2_final(&h2_ctx, chall_1, 5 * lambda_bytes + 8);
 }
 
@@ -272,7 +277,8 @@ void faest_sign(uint8_t* sig, const uint8_t* msg, size_t msglen, const uint8_t* 
     if (rho && rholen) {
       H3_update(&h3_ctx, rho, rholen);
     }
-    H3_final(&h3_ctx, rootkey, lambdaBytes, signature_iv(sig, params));
+    const size_t iv_size = lambdaBytes;
+    H3_final(&h3_ctx, rootkey, lambdaBytes, signature_iv(sig, params), iv_size);
   }
 
   // Step: 3

@@ -50,7 +50,7 @@ typedef hash_context H3_context_t;
 
 void H3_init(H3_context_t* ctx, unsigned int security_param);
 void H3_update(H3_context_t* ctx, const uint8_t* src, size_t len);
-void H3_final(H3_context_t* ctx, uint8_t* digest, size_t len, uint8_t* iv);
+void H3_final(H3_context_t* ctx, uint8_t* digest, size_t len, uint8_t* iv, size_t iv_len);
 
 FAEST_END_C_DECL
 
