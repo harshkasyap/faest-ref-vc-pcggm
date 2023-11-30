@@ -617,6 +617,11 @@ static inline void ortho_tweaked(const uint8_t* in, uint8_t* out, size_t len) {
   out[0] ^= 1;
 }
 
+static inline void ortho_tweaked2(const uint8_t* in, uint8_t* out, size_t len) {
+  ortho(in, out, len);
+  out[0] ^= 2;
+}
+
 static inline void permute_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
   // we need to create these temporary variables because they need to be aligned
   block256 tmp256 = block256_set_zero();
@@ -715,9 +720,27 @@ static inline void ccr_tweaked(const uint8_t* key, const uint8_t* iv, uint8_t* o
   }
 }
 
+static inline void ccr_tweaked2(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
+  static uint8_t tmp[32];
+  ortho_tweaked2(key, tmp, outlen);
+  prg(tmp, iv, out, seclvl, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
+}
+
 static inline void ccr_tweaked_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
   static uint8_t tmp[32];
   ortho_tweaked(in, tmp, outlen);
+  permute_with_ctx(ctx, tmp, out, outlen);
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
+}
+
+static inline void ccr_tweaked_with_ctx2(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t outlen) {
+  static uint8_t tmp[32];
+  ortho_tweaked2(in, tmp, outlen);
   permute_with_ctx(ctx, tmp, out, outlen);
   for (size_t i = 0; i < outlen; i++) {
     out[i] ^= tmp[i];
@@ -728,16 +751,14 @@ void ccr2(const uint8_t* src, const uint8_t* iv, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len, unsigned int seclvl) {
   ccr(src, iv, seed, seclvl, seed_len);
   ccr_tweaked(src, iv, commitment, seclvl, commitment_len/2);
-  // zero the other half of commitment
-  memset(commitment + commitment_len/2, 0, commitment_len/2);
+  ccr_tweaked2(src, iv, commitment+(commitment_len/2), seclvl, commitment_len/2);
 }
 
 void ccr2_with_ctx(union CCR_CTX* ctx, const uint8_t* src, uint8_t* seed, size_t seed_len,
           uint8_t* commitment, size_t commitment_len) {
   ccr_with_ctx(ctx, src, seed, seed_len);
   ccr_tweaked_with_ctx(ctx, src, commitment, commitment_len/2);
-  // zero the other half of commitment
-  memset(commitment + commitment_len/2, 0, commitment_len/2);
+  ccr_tweaked_with_ctx2(ctx, src, commitment+(commitment_len/2), commitment_len/2);
 }
 
 void ccr2_x4(const uint8_t* src0, const uint8_t* src1, const uint8_t* src2, const uint8_t* src3,
