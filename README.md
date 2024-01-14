@@ -1,3 +1,14 @@
+# FAEST + half-tree
+
+This is the implementation that uses the [half-tree technique](https://eprint.iacr.org/2022/1431)
+to perform vector commitments used in the [FAEST signature scheme](https://faest.info/).
+
+The implementation is based on the FAEST [reference implementation](https://github.com/faest-sign/faest-ref).
+*This is proof-of-concept implementation.
+It may contain bugs and security issues. Please do not use in production systems.*
+
+Below is the original README.
+
 # FAEST - Reference implementation
 
 ## Dependencies
