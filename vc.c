@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdint.h>
 
 typedef struct tree_t {
   uint8_t* nodes;   /* The data for each node */
@@ -65,13 +66,28 @@ static void expand_seeds(tree_t* tree, const uint8_t* iv, const faest_paramset_t
   // expand the tree; first level uses prg, the rest uses CCR
   prg(NODE(*tree, 0, lambda_bytes), iv, NODE(*tree, 1, lambda_bytes),
     params->faest_param.lambda, lambda_bytes * 2);
-  for (size_t i = 1; i <= lastNonLeaf; i++) {
+  
+  // const uint8_t one = 1;
+  // const uint8_t* ptr_one = &one;
+  
+  // Create an array of 1s for XOR operation
+  // uint8_t one_value[lambda_bytes];
+  // memset(one_value, 1, lambda_bytes);  // Fill the array with 1s (0x01)
+  uint8_t* one_value = (uint8_t*)malloc(lambda_bytes);
+  memset(one_value, 1, lambda_bytes);
+
+  for (size_t i = 1; i < lastNonLeaf; i++) {
     // the nodes are located in memory consecutively
     ccr_with_ctx(&ctx, NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes), lambda_bytes);
     // xor the left child with the parent
-    xor_u8_array(NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes),
-        NODE(*tree, 2 * i + 2, lambda_bytes), lambda_bytes);
+    xor_u8_array(NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes), NODE(*tree, 2 * i + 2, lambda_bytes), lambda_bytes);
   }
+
+  // the nodes are located in memory consecutively
+    size_t i = lastNonLeaf;
+    ccr_with_ctx(&ctx, NODE(*tree, i, lambda_bytes), NODE(*tree, 2 * i + 1, lambda_bytes), lambda_bytes);
+    xor_u8_array(NODE(*tree, i, lambda_bytes), one_value, NODE(*tree, 2 * i + 2, lambda_bytes), lambda_bytes);
+    ccr_with_ctx(&ctx, NODE(*tree, 2 * i + 2, lambda_bytes), NODE(*tree, 2 * i + 2, lambda_bytes), lambda_bytes);
 
   CCR_CTX_free(&ctx, params->faest_param.lambda);
 }
@@ -247,7 +263,7 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
 
   // Step: 3..9
   uint32_t a = 0;
-  for (uint32_t i = 1; i <= depth; i++) {
+  for (uint32_t i = 1; i < depth; i++) {
     memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + !b[depth - i])),
            cop + (lambdaBytes * (i - 1)), lambdaBytes);
     memset(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + b[depth - i])), 0, lambdaBytes);
@@ -272,6 +288,35 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
 
     a = a * 2 + b[depth - i];
   }
+
+    uint32_t i = depth;
+    memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + !b[depth - i])),
+           cop + (lambdaBytes * (i - 1)), lambdaBytes);
+    memset(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + b[depth - i])), 0, lambdaBytes);
+
+
+    uint8_t* one_value = (uint8_t*)malloc(lambdaBytes);
+    memset(one_value, 1, lambdaBytes);
+
+    const uint32_t current_depth = (1 << (i - 1));
+    for (uint32_t j = 0; j < current_depth; j++) {
+      if (j == a) {
+        continue;
+      }
+
+      uint8_t out[2 * MAX_LAMBDA_BYTES];
+      // ccr(vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), iv, out, lambda, lambdaBytes);
+      ccr_with_ctx(&ctx, vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), out, lambdaBytes);
+      // xor the left child with the parent
+      xor_u8_array(vecComRec->k + (lambdaBytes * getNodeIndex(i - 1, j)), one_value,
+          out + lambdaBytes, lambdaBytes);
+      ccr_with_ctx(&ctx, out + lambdaBytes, out + lambdaBytes, lambdaBytes);
+      memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * j)), out, lambdaBytes);
+      memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, (2 * j) + 1)), out + lambdaBytes,
+             lambdaBytes);
+    }
+
+    //a = a * 2 + b[depth - i];
 
   // Step: 10..11
   unsigned int j = 0;
