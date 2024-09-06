@@ -291,11 +291,11 @@ int rijndael256_encrypt_block(const aes_round_keys_t* key, const uint8_t* plaint
 }
 
 // avx stuff
-inline block128 block128_xor(block128 x, block128 y) { return _mm_xor_si128(x, y); }
-inline block256 block256_xor(block256 x, block256 y) { return _mm256_xor_si256(x, y); }
-inline block128 block128_set_zero() { return _mm_setzero_si128(); }
-inline block256 block256_set_zero() { return _mm256_setzero_si256(); }
-inline block256 block256_set_low128(block128 x)
+static inline block128 block128_xor(block128 x, block128 y) { return _mm_xor_si128(x, y); }
+static inline block256 block256_xor(block256 x, block256 y) { return _mm256_xor_si256(x, y); }
+static inline block128 block128_set_zero() { return _mm_setzero_si128(); }
+static inline block256 block256_set_zero() { return _mm256_setzero_si256(); }
+static inline block256 block256_set_low128(block128 x)
 {
 	return _mm256_inserti128_si256(_mm256_setzero_si256(), x, 0);
 }
@@ -312,23 +312,23 @@ static inline block128 load_high_128(const block256* block)
 	return out;
 }
 
-inline block192 block192_set_low64(uint64_t x)
+static inline block192 block192_set_low64(uint64_t x)
 {
 	block192 out = {{x, 0, 0}};
 	return out;
 }
 
-inline block192 block192_set_low32(uint32_t x)
+static inline block192 block192_set_low32(uint32_t x)
 {
 	return block192_set_low64(x);
 }
 
-inline block192 block192_set_zero()
+static inline block192 block192_set_zero()
 {
 	return block192_set_low64(0);
 }
 
-inline block192 block192_set_low128(const uint8_t* x)
+static inline block192 block192_set_low128(const uint8_t* x)
 {
 	block192 out = {{*((uint64_t*)(x)), *((uint64_t*)(x+8)), 0}};
 	return out;
@@ -458,7 +458,7 @@ void rijndael256_keygen(rijndael256_round_keys* round_keys, block256 key)
 	rijndael256_keygen_helper(&round_keys->keys[13], kga, &round_keys->keys[14]);
 }
 
-inline block192 block192_xor(block192 x, block192 y)
+static inline block192 block192_xor(block192 x, block192 y)
 {
 	// Plain c version for now at least. Hopefully it will be autovectorized.
 	block192 out;
@@ -478,7 +478,7 @@ static inline void cvt192_to_2x128(block128* out, const block192* in)
 // that AES-NI can be used for the sbox. The rijndael192 state is represented with the first 4
 // columns in the first block128, and then the last two columns are stored twice in the second
 // block128.
-inline void rijndael192_rotate_rows_undo_128(block128* s)
+static inline void rijndael192_rotate_rows_undo_128(block128* s)
 {
 	block128 mask = _mm_setr_epi8(
 		0, -1, -1,  0,
@@ -528,7 +528,7 @@ void rijndael192_encrypt_block_avx(
 
 // This implements the rijndael256 RotateRows step, then cancels out the RotateRows of AES so
 // that AES-NI can be used for the sbox.
-inline void rijndael256_rotate_rows_undo_128(block128* s)
+static inline void rijndael256_rotate_rows_undo_128(block128* s)
 {
 	// Swapping bytes between 128-bit halves is equivalent to rotating left overall, then
 	// rotating right within each half.
@@ -552,7 +552,7 @@ inline void rijndael256_rotate_rows_undo_128(block128* s)
 }
 
 
-inline void rijndael256_round(
+static inline void rijndael256_round(
 	const rijndael256_round_keys* round_keys, block256* state,
 	size_t num_keys, size_t evals_per_key, int round)
 {

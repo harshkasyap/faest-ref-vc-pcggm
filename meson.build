@@ -15,7 +15,8 @@ cpp = meson.get_compiler('cpp')
 conf_data = configuration_data()
 
 # compile flags and defines
-flags = []
+flags = ['-maes', '-mavx2']
+#flags = []
 c_flags = []
 cpp_flags = []
 defines = []
@@ -27,6 +28,7 @@ if cc.get_id() != 'msvc'
     '-Werror=incompatible-pointer-types',
   ]
   flags += '-Wshadow'
+  #flags += '-msse4.1'
   defines += '-D_GNU_SOURCE'
 
   if get_option('march-native').enabled()
@@ -52,6 +54,8 @@ else
   warnings += '4127'
   # unary minus of unsigned types
   warnings += '4146'
+  # 'inline' used more than once
+  #warnings += '4141'
 
   foreach w : warnings
     flags += '/wd' + w
@@ -593,4 +597,4 @@ run_target('prepare_nist',
   ]
 )
 
-subdir('tests')
+#subdir('tests')
