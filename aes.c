@@ -711,6 +711,48 @@ void ccr_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t ou
   }
 }
 
+// AES(c_o ^ ortho(x)) ^ ortho(x)
+void ccr_without_ctx(unsigned int seclvl, const uint8_t* iv, const uint8_t* in, uint8_t* out, size_t outlen) {
+  union CCR_CTX ctx = CCR_CTX_setup(seclvl, iv);
+	
+  static uint8_t tmp[32];
+  ortho(in, tmp, outlen);
+  
+  uint8_t* one_value = (uint8_t*)malloc(outlen);
+  memset(one_value, 1, outlen);
+  
+  switch (outlen*8) {
+  
+  case 256:
+    
+    permute_with_ctx(&ctx, tmp, out, outlen);
+    break;
+  
+  case 192:
+  
+    //union CCR_CTX tctx = CCR_CTX_setup(params->faest_param.lambda, iv);
+
+    permute_with_ctx(&ctx, tmp, out, outlen);
+    break;
+  
+  default:
+ 
+    /*for (size_t i = 0; i < outlen; i++) {
+      out[i] = one_value[i] ^ tmp[i];
+    }*/
+    
+    permute_with_ctx(&ctx, tmp, out, outlen);
+
+    break;
+  }
+  
+  for (size_t i = 0; i < outlen; i++) {
+    out[i] ^= tmp[i];
+  }
+
+  CCR_CTX_free(&ctx, seclvl);
+}
+
 static inline void ccr_tweaked(const uint8_t* key, const uint8_t* iv, uint8_t* out, unsigned int seclvl, size_t outlen) {
   static uint8_t tmp[32];
   ortho_tweaked(key, tmp, outlen);
