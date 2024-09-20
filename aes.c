@@ -713,43 +713,108 @@ void ccr_with_ctx(union CCR_CTX* ctx, const uint8_t* in, uint8_t* out, size_t ou
 
 // AES(c_o ^ ortho(x)) ^ ortho(x)
 void ccr_without_ctx(unsigned int seclvl, const uint8_t* iv, const uint8_t* in, uint8_t* out, size_t outlen) {
-  union CCR_CTX ctx = CCR_CTX_setup(seclvl, iv);
 	
-  static uint8_t tmp[32];
-  ortho(in, tmp, outlen);
-  
-  uint8_t* one_value = (uint8_t*)malloc(outlen);
-  memset(one_value, 1, outlen);
-  
+  union CCR_CTX ctx; // = CCR_CTX_setup(seclvl, iv);
+
   switch (outlen*8) {
   
   case 256:
+    uint8_t left_16[16];
+    uint8_t right_16[16];
     
-    permute_with_ctx(&ctx, tmp, out, outlen);
+    memcpy(left_16, in, 16);
+    memcpy(right_16, in + 16, 16);
+
+    /*
+    uint8_t* ivl = (uint8_t*)malloc(outlen);
+    memcpy(ivl, left_16, 16);
+    memcpy(ivl + 16, iv, 16);
+
+    block256 iv256l = _mm256_loadu_si256((__m256i const*)ivl);
+    free(ivl);
+
+    rijndael256_keygen(&ctx.r256_round_keys, iv256l);
+    */
+    
+    uint8_t* ivr = (uint8_t*)malloc(outlen);
+    memcpy(ivr, right_16, 16);
+    memcpy(ivr + 16, iv, 16);
+
+    block256 iv256r = _mm256_loadu_si256((__m256i const*)ivr);
+    free(ivr);
+    
+    rijndael256_keygen(&ctx.r256_round_keys, iv256r);
+    
+    static uint8_t tmpl[16];
+    ortho(left_16, tmpl, 16); // ortho (rl)
+
+    permute_with_ctx(&ctx, tmpl, out, 32);
+  
+    for (size_t i = 0; i < 16; i++) {
+      out[i] ^= tmpl[i];
+    }
+
+    permute_with_ctx(&ctx, tmpl, out, 32);
+
+    for (size_t i = 0; i < 16; i++) {
+      out[i+16] ^= tmpl[i];
+    }
+
     break;
   
   case 192:
   
-    //union CCR_CTX tctx = CCR_CTX_setup(params->faest_param.lambda, iv);
+    uint8_t _left_16[16];  //rl - 128
+    uint8_t _right_8[8];   //rr - 64
 
-    permute_with_ctx(&ctx, tmp, out, outlen);
+    memcpy(_left_16, in, 16);
+    memcpy(_right_8, in + 16, 8);
+
+    uint8_t* _ivr = (uint8_t*)malloc(outlen);
+    memcpy(_ivr, _right_8, 8);
+    memcpy(_ivr + 8, iv, 16);
+
+    block192 _iv192r;
+    memcpy(&_iv192r, _ivr, sizeof(block192));
+    free(_ivr);
+
+    rijndael192_keygen(&ctx.r192_round_keys, _iv192r);
+
+    static uint8_t _tmpl[16];
+    ortho(_left_16, _tmpl, 16); // ortho (rl)
+
+    permute_with_ctx(&ctx, _tmpl, out, 24); //AES(ortho(rl))
+
+    // XOR with Ortho
+    for (size_t i = 0; i < 16; i++) {
+      out[i] ^= _tmpl[i];
+    }
+
+    // Another AES
+    permute_with_ctx(&ctx, _tmpl, out, 24);
+
+    // Another XOR
+    for (size_t i = 0; i < 8; i++) {
+      out[i+16] ^= _tmpl[i];
+    }
+
     break;
   
   default:
- 
-    /*for (size_t i = 0; i < outlen; i++) {
-      out[i] = one_value[i] ^ tmp[i];
-    }*/
+    ctx = CCR_CTX_setup(seclvl, iv);
+    
+    static uint8_t tmp[32];
+    ortho(in, tmp, outlen);  
     
     permute_with_ctx(&ctx, tmp, out, outlen);
+
+    for (size_t i = 0; i < outlen; i++) {
+      out[i] ^= tmp[i];
+    }
 
     break;
   }
   
-  for (size_t i = 0; i < outlen; i++) {
-    out[i] ^= tmp[i];
-  }
-
   CCR_CTX_free(&ctx, seclvl);
 }
 

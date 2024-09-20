@@ -142,7 +142,7 @@ void vector_commitment(const uint8_t* rootKey, const uint8_t* iv, const faest_pa
                        uint32_t lambda, vec_com_t* vecCom, uint32_t depth) {
   const unsigned int lambdaBytes      = lambda / 8;
   const unsigned int numVoleInstances = 1 << depth;
-
+  
   // Generating the tree
   tree_t tree = generate_seeds(rootKey, iv, params, depth);
 
