@@ -57,6 +57,7 @@ int main(void) {
   unsigned long long mlen = sizeof(omessage);
   clock_t start_time1 = clock();
   ret                     = crypto_sign_open(omessage, &mlen, sm, smlen, pk);
+  printf("%zu", ret);
   printf("Time taken to verify: %f seconds\n",(double)(clock() - start_time1) / CLOCKS_PER_SEC);
   if (ret != 0) {
     printf("Failed to verify (ret = %d)\n", ret);

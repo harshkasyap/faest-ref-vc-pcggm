@@ -642,9 +642,9 @@ static uint8_t* aes_verify_128(const uint8_t* d, uint8_t** Q, const uint8_t* cha
   // do nothing
 
   // Step: 4..10
-  for (unsigned int i = 0, col = 0; i < tau; i++) {
-    unsigned int depth = i < t0 ? k0 : k1;
-    uint8_t decoded_challenge[MAX_DEPTH];
+  for (unsigned int i = 0, col = 0; i < 1; i++) {
+    unsigned int depth = k0 + 4; //i < t0 ? k0 : k1;
+    uint8_t decoded_challenge[MAX_DEPTH + 4];
     ChalDec(chall_3, i, k0, t0, k1, t1, decoded_challenge);
     for (unsigned int j = 0; j < depth; j++, ++col) {
       if (decoded_challenge[j] == 1) {

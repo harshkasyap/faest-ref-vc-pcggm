@@ -2,6 +2,8 @@
  *  SPDX-License-Identifier: MIT
  */
 
+#include "stdio.h"
+
 #ifdef SUPERCOP
 #include "crypto_sign.h"
 #else
@@ -37,6 +39,7 @@ int crypto_sign_open(unsigned char* m, unsigned long long* mlen, const unsigned 
   }
   unsigned long long m_length = smlen - FAEST_@PARAM@_SIGNATURE_SIZE;
   if (faest_@PARAM_L@_verify(pk, sm, m_length, sm + m_length, FAEST_@PARAM@_SIGNATURE_SIZE)) {
+    // printf("%zu", faest_@PARAM_L@_verify(pk, sm, m_length, sm + m_length, FAEST_@PARAM@_SIGNATURE_SIZE));
     return -1;
   }
 

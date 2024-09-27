@@ -256,7 +256,7 @@ void vector_open(const uint8_t* k, const uint8_t* com, const uint8_t* b, uint8_t
                  uint8_t* com_j, uint32_t depth, uint32_t lambdaBytes) {
   // Step: 1
   uint64_t leafIndex = NumRec(depth, b);
-
+  
   // Step: 3..6
   uint32_t a = 0;
   for (uint32_t i = 0; i < depth; i++) {
@@ -272,9 +272,14 @@ void vector_open(const uint8_t* k, const uint8_t* com, const uint8_t* b, uint8_t
 void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t* com_j,
                            const uint8_t* b, uint32_t lambda, uint32_t depth,
                            vec_com_rec_t* vecComRec) {
+
+  //size_t length = sizeof(b) / sizeof(b[0]);
+  //printf(" length %zu, B %zu ", length, depth);                            
+
   // Initializing
   const unsigned int lambdaBytes      = lambda / 8;
   const unsigned int numVoleInstances = 1 << depth;
+
   const uint64_t leafIndex            = NumRec(depth, b);
 
   // setup a single context for all
@@ -282,12 +287,19 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
 
   //printf("\nreconstruction");
   // Step: 3..9
+  /*
+  
+  for (uint32_t i = 1; i < depth; i++) { 
+    printf("bi %zu", b[depth - i]);
+  }
+  */
+
   uint32_t a = 0;
-  for (uint32_t i = 1; i < depth; i++) {
+  for (uint32_t i = 1; i < depth; i++) {    
     memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + !b[depth - i])),
            cop + (lambdaBytes * (i - 1)), lambdaBytes);
     memset(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + b[depth - i])), 0, lambdaBytes);
-
+    
     const uint32_t current_depth = (1 << (i - 1));
     for (uint32_t j = 0; j < current_depth; j++) {
       if (j == a) {
@@ -306,11 +318,13 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
       memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, (2 * j) + 1)), out + lambdaBytes,
              lambdaBytes);
     }
-
+    
+    //size_t length = sizeof(b) / sizeof(b[0]);
+    //printf(" A %zu, B %zu ", length, depth);
     a = a * 2 + b[depth - i];
+
   }
-   
-    uint32_t i = depth;
+  uint32_t i = depth;
    // printf("\n depth %zu", i);
     memcpy(vecComRec->k + (lambdaBytes * getNodeIndex(i, 2 * a + !b[depth - i])),
            cop + (lambdaBytes * (i - 1)), lambdaBytes);
@@ -544,6 +558,7 @@ void vector_reconstruction(const uint8_t* iv, const uint8_t* cop, const uint8_t*
 
   // free aes context
   //CCR_CTX_free(&ctx, lambda);
+
 }
 
 #if defined(FAEST_TESTS)

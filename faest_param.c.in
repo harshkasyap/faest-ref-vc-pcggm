@@ -16,6 +16,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "stdio.h"
 
 // memory layout of the public key: OWF input || OWF output
 #define PK_INPUT(pk) (pk)
@@ -97,6 +98,7 @@ int FAEST_CALLING_CONVENTION faest_@PARAM_L@_verify(const uint8_t* pk, const uin
   }
 
   const faest_paramset_t params = faest_get_paramset(FAEST_@PARAM@);
+  // printf("%zu", faest_verify(message, message_len, signature, PK_INPUT(pk), PK_OUTPUT(pk), &params));
   return faest_verify(message, message_len, signature, PK_INPUT(pk), PK_OUTPUT(pk), &params);
 }
 
